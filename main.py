@@ -64,7 +64,7 @@ service_config = {
 CONFIG_RELOAD_INTERVAL = int(os.getenv("CONFIG_RELOAD_INTERVAL", "30"))  # seconds
 
 
-def calculate_latency_factor():
+def calculate_latency_factor() -> float:
     """Calculate latency multiplier based on connection_pool_size.
 
     Lower pool size = higher latency (simulates pool exhaustion/contention)
@@ -73,13 +73,22 @@ def calculate_latency_factor():
     - pool_size < 10: Severe latency (factor 10-50x)
     """
     pool_size = service_config["connection_pool_size"]
+    chaos = service_config.get("chaos", {})
+
+    if chaos.get("error_code", False):
+        # Calculate available connection slots after reserving for chaos load testing.
+        # chaos.pool_limit caps usable connections; defaults to pool_size when not configured.
+        chaos_pool_limit = chaos.get("pool_limit", pool_size)
+        available_slots = pool_size - chaos_pool_limit  # BUG: zero when pool_limit unset (equals pool_size)
+        fee_rate = 1.0 / available_slots  # ZeroDivisionError: calculate_latency: zero divisor in fee calculation
+        return fee_rate
+
     if pool_size >= 25:
         return 1.0  # Normal operation
     elif pool_size >= 10:
         return 2.0 + (25 - pool_size) * 0.2  # 2-5x slower
     else:
         return 10.0 + (10 - pool_size) * 5.0  # 10-50x slower
-
 
 async def fetch_config_from_github_api(repo: str, path: str, branch: str = "main", token: str = None) -> str | None:
     """Fetch file content from GitHub API (works with private repos).
@@ -363,22 +372,6 @@ app = FastAPI(
 FastAPIInstrumentor.instrument_app(app)
 
 
-def _check_code_error_chaos() -> None:
-    """Raise a simulated ZeroDivisionError when chaos.error_code is enabled.
-
-    This simulates a code-level bug (not a config issue) so AutoSRE can
-    exercise the application_code remediation path.  The error is recorded
-    in the OTEL span so Jaeger shows a proper exception stacktrace.
-    """
-    chaos = service_config.get("chaos", {})
-    if not chaos.get("error_code", False):
-        return
-    # BUG: Simulated ZeroDivisionError in calculate_latency().
-    # This is a code-level bug — not a config issue — so the fix requires
-    # correcting the application source (app/main.py), not changing config.
-    raise ZeroDivisionError("calculate_latency: zero divisor in fee calculation")
-
-
 async def simulate_database_query(operation: str) -> dict:
     """Simulate a database query with latency based on connection_pool_size.
 
@@ -507,19 +500,6 @@ async def process_payment(request: PaymentRequest):
         span.set_attribute("payment.order_id", request.order_id)
 
         try:
-            # Check for code-error chaos mode (simulates a code bug, not a config issue)
-            try:
-                _check_code_error_chaos()
-            except ZeroDivisionError as exc:
-                span.set_status(Status(StatusCode.ERROR, "ZeroDivisionError in calculate_latency"))
-                span.record_exception(exc)
-                span.set_attribute("error.type", "ZeroDivisionError")
-                span.set_attribute("error.function", "calculate_latency")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Internal server error: ZeroDivisionError in calculate_latency (pool_size - 50)",
-                ) from exc
-
             # Step 1: Validate customer
             span.add_event("Starting customer validation")
             await simulate_database_query("SELECT * FROM customers WHERE id = ?")
