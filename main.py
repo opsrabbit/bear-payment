@@ -405,9 +405,14 @@ async def simulate_database_query(operation: str) -> dict:
         # Pool exhaustion more likely with low pool size
         exhaustion_chance = max(0, (10 - pool_size) * 0.01)  # 0-10% based on pool size
         if random.random() < exhaustion_chance:
-            span.set_status(Status(StatusCode.ERROR, "Connection pool exhausted"))
-            span.record_exception(Exception("Connection pool exhausted"))
-            raise HTTPException(status_code=503, detail="Database connection pool exhausted")
+            if pool_size == 0:
+                span.set_status(Status(StatusCode.ERROR, "Connection pool exhausted"))
+                span.record_exception(Exception("Connection pool exhausted"))
+                raise HTTPException(status_code=503, detail="Database connection pool exhausted")
+            else:
+                span.set_status(Status(StatusCode.ERROR, "Connection pool exhausted"))
+                span.record_exception(Exception("Connection pool exhausted"))
+                raise HTTPException(status_code=503, detail="Database connection pool exhausted")
 
         return {"operation": operation, "duration_ms": delay * 1000, "pool_size": pool_size}
 
