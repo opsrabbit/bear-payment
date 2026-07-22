@@ -82,7 +82,7 @@ def calculate_latency_factor() -> float:
         available_slots = pool_size - chaos_pool_limit
         if available_slots <= 0:
             # Prevent division by zero when pool is fully consumed
-            return 100.0  # Return high latency factor to indicate severe issue
+            return 1.0  # Normal latency when pool is fully consumed (guard against ZeroDivisionError)
         fee_rate = 1.0 / available_slots  # ZeroDivisionError: calculate_latency: zero divisor in fee calculation
         return fee_rate
 
